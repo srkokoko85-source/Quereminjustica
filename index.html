@@ -1,0 +1,327 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, addDoc, query, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { Shield, Send, CheckCircle, XCircle, AlertTriangle, Terminal, MessageSquare } from 'lucide-react';
+
+// Firebase Configuration
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'roblox-age-bypass-mobile';
+
+const QUESTIONS = [
+  {
+    type: 'trivia',
+    question: "Qual foi o nome original do Roblox em 2004?",
+    options: ["DynaBlocks", "GoBlocks", "BrickSim", "BuildIt"],
+    answer: 0
+  },
+  {
+    type: 'logic',
+    question: "Complete a sequência de IDs: 102, 204, 408, ...",
+    options: ["612", "816", "510", "1024"],
+    answer: 1
+  },
+  {
+    type: 'reflex',
+    question: "TOQUE NO BOTÃO VERDE RÁPIDO!",
+    target: 'green'
+  },
+  {
+    type: 'trivia',
+    question: "Quem é o CEO e co-fundador do Roblox?",
+    options: ["Builderman", "David Baszucki", "Erik Cassel", "John Shedletsky"],
+    answer: 1
+  },
+  {
+    type: 'pattern',
+    question: "Qual destes itens é um acessório de pescoço?",
+    options: ["Fedora", "Clockwork Headphones", "Jade Necklace", "Valkyrie Helm"],
+    answer: 2
+  },
+  {
+    type: 'trivia',
+    question: "Qual o limite máximo de amigos no Roblox atualmente?",
+    options: ["100", "200", "500", "Ilimitado"],
+    answer: 1
+  }
+];
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [gameState, setGameState] = useState('menu'); // menu, playing, won, lost
+  const [level, setLevel] = useState(0);
+  const [timer, setTimer] = useState(15);
+  const [feedback, setFeedback] = useState(null);
+  const [showChat, setShowChat] = useState(false); // Mobile chat toggle
+  const chatEndRef = useRef(null);
+
+  useEffect(() => {
+    const initAuth = async () => {
+      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        await signInWithCustomToken(auth, __initial_auth_token);
+      } else {
+        await signInAnonymously(auth);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const chatCol = collection(db, 'artifacts', appId, 'public', 'data', 'global_chat');
+    const q = query(chatCol);
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const msgs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      const sortedMsgs = msgs.sort((a, b) => (a.timestamp?.seconds || 0) - (b.timestamp?.seconds || 0)).slice(-40);
+      setMessages(sortedMsgs);
+      if (showChat) {
+        setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+      }
+    }, (err) => console.error("Firestore Error:", err));
+
+    return () => unsubscribe();
+  }, [user, showChat]);
+
+  useEffect(() => {
+    let interval;
+    if (gameState === 'playing' && timer > 0 && !feedback) {
+      interval = setInterval(() => setTimer(prev => prev - 1), 1000);
+    } else if (timer === 0 && gameState === 'playing') {
+      handleAnswer(null);
+    }
+    return () => clearInterval(interval);
+  }, [gameState, timer, feedback]);
+
+  const sendMessage = async (e) => {
+    e.preventDefault();
+    if (!newMessage.trim() || !user) return;
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'global_chat'), {
+        text: newMessage,
+        userId: user.uid,
+        userName: `User_${user.uid.substring(0, 4)}`,
+        timestamp: serverTimestamp()
+      });
+      setNewMessage('');
+    } catch (err) {
+      console.error("Send error:", err);
+    }
+  };
+
+  const startGame = () => {
+    setLevel(0);
+    setTimer(15);
+    setGameState('playing');
+    setFeedback(null);
+  };
+
+  const handleAnswer = (index) => {
+    const currentQuestion = QUESTIONS[level];
+    const isCorrect = index === currentQuestion.answer || (currentQuestion.type === 'reflex' && index === 'green');
+
+    if (isCorrect) {
+      setFeedback('correct');
+      setTimeout(() => {
+        if (level + 1 < QUESTIONS.length) {
+          setLevel(prev => prev + 1);
+          setTimer(Math.max(5, 15 - (level * 2)));
+          setFeedback(null);
+        } else {
+          setGameState('won');
+        }
+      }, 800);
+    } else {
+      setFeedback('wrong');
+      setTimeout(() => {
+        setGameState('lost');
+      }, 1000);
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-screen bg-[#0f1012] text-white font-sans overflow-hidden">
+      
+      {/* Header - Mobile Friendly */}
+      <div className="bg-[#191a1d] p-4 flex items-center justify-between border-b border-white/5 shrink-0">
+        <div className="flex items-center gap-2">
+          <Shield size={20} className="text-blue-500" />
+          <span className="font-black tracking-tighter text-lg italic">BYPASS.EXE</span>
+        </div>
+        <button 
+          onClick={() => setShowChat(!showChat)}
+          className={`p-2 rounded-lg transition-colors ${showChat ? 'bg-blue-600' : 'bg-white/5'}`}
+        >
+          <MessageSquare size={24} />
+        </button>
+      </div>
+
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden relative">
+        
+        {/* Game Area */}
+        <div className={`flex-1 flex flex-col items-center p-4 overflow-y-auto pt-8 ${showChat ? 'hidden md:flex' : 'flex'}`}>
+          {gameState === 'menu' && (
+            <div className="text-center w-full max-w-sm bg-[#191a1d] p-8 rounded-3xl border border-white/10 shadow-2xl mt-10">
+              <div className="w-20 h-20 bg-blue-600 rounded-2xl mx-auto mb-6 flex items-center justify-center shadow-lg shadow-blue-500/30">
+                <Terminal size={40} />
+              </div>
+              <h1 className="text-3xl font-black mb-3 italic uppercase">PROVE SUA IDADE</h1>
+              <p className="text-gray-400 text-base mb-8 leading-relaxed">
+                A segurança do Roblox bloqueou você. Resolva os protocolos para provar que você é um "adulto".
+              </p>
+              <button 
+                onClick={startGame}
+                className="w-full bg-blue-500 hover:bg-blue-400 text-white font-black py-5 rounded-2xl text-xl transition-all active:scale-95 shadow-xl shadow-blue-500/20"
+              >
+                INICIAR BYPASS
+              </button>
+            </div>
+          )}
+
+          {gameState === 'playing' && (
+            <div className="w-full max-w-md mx-auto">
+              <div className="flex justify-between items-center mb-6 bg-white/5 p-4 rounded-2xl border border-white/5">
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-blue-400 font-black uppercase">Protocolo</span>
+                  <span className="text-xl font-black">{level + 1} de {QUESTIONS.length}</span>
+                </div>
+                <div className="text-right flex flex-col">
+                  <span className="text-[10px] text-red-400 font-black uppercase">Tempo</span>
+                  <span className={`text-2xl font-mono font-black ${timer < 5 ? 'text-red-500 animate-pulse' : 'text-white'}`}>
+                    {timer}s
+                  </span>
+                </div>
+              </div>
+
+              <div className={`bg-[#191a1d] p-6 rounded-3xl border-2 transition-all duration-300 ${
+                feedback === 'correct' ? 'border-green-500 shadow-lg shadow-green-500/20' : 
+                feedback === 'wrong' ? 'border-red-500 shadow-lg shadow-red-500/20' : 'border-white/10'
+              }`}>
+                <h2 className="text-xl md:text-2xl font-bold mb-8 text-center leading-tight min-h-[60px] flex items-center justify-center">
+                  {QUESTIONS[level].question}
+                </h2>
+
+                {QUESTIONS[level].type === 'reflex' ? (
+                  <div className="grid grid-cols-2 gap-4 h-48">
+                    <button onClick={() => handleAnswer('red')} className="bg-red-600 rounded-2xl transition-all border-b-8 border-red-900 active:border-b-0 active:translate-y-1" />
+                    <button onClick={() => handleAnswer('green')} className="bg-green-600 rounded-2xl transition-all border-b-8 border-green-900 active:border-b-0 active:translate-y-1" />
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-4">
+                    {QUESTIONS[level].options.map((opt, i) => (
+                      <button
+                        key={i}
+                        onClick={() => handleAnswer(i)}
+                        disabled={feedback !== null}
+                        className="text-left p-5 rounded-2xl bg-white/5 border border-white/10 hover:bg-blue-600/20 hover:border-blue-500 transition-all flex items-center justify-between group active:scale-95"
+                      >
+                        <span className="font-bold text-lg leading-tight">{opt}</span>
+                        <div className="w-6 h-6 rounded-full border-2 border-white/20 group-hover:border-blue-500 shrink-0 ml-3" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              
+              {feedback === 'correct' && (
+                <div className="mt-6 flex items-center justify-center gap-2 text-green-400 font-black animate-bounce bg-green-500/10 py-3 rounded-full">
+                  <CheckCircle size={20} /> ACESSO CONCEDIDO
+                </div>
+              )}
+            </div>
+          )}
+
+          {(gameState === 'won' || gameState === 'lost') && (
+            <div className="text-center bg-[#191a1d] p-8 rounded-3xl border border-white/10 shadow-2xl max-w-sm w-full mt-10">
+              {gameState === 'won' ? (
+                <>
+                  <div className="w-20 h-20 bg-green-500 rounded-full mx-auto mb-6 flex items-center justify-center shadow-lg shadow-green-500/30">
+                    <CheckCircle size={40} className="text-white" />
+                  </div>
+                  <h2 className="text-3xl font-black mb-3 text-green-400 italic">VOCÊ É ADULTO!</h2>
+                  <p className="text-gray-400 mb-8 font-medium">Bypass concluído. O sistema agora ignora sua verificação de idade.</p>
+                </>
+              ) : (
+                <>
+                  <div className="w-20 h-20 bg-red-500 rounded-full mx-auto mb-6 flex items-center justify-center shadow-lg shadow-red-500/30">
+                    <XCircle size={40} className="text-white" />
+                  </div>
+                  <h2 className="text-3xl font-black mb-3 text-red-500 italic">BLOQUEADO!</h2>
+                  <p className="text-gray-400 mb-8 font-medium">O sistema identificou um comportamento infantil. Tente provar sua idade novamente.</p>
+                </>
+              )}
+              <button 
+                onClick={startGame}
+                className="w-full bg-blue-600 text-white font-black py-5 rounded-2xl text-lg hover:bg-blue-500 transition-all shadow-xl shadow-blue-500/20 active:scale-95"
+              >
+                REPETIR TESTE
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Global Chat Sidebar (Overlay on Mobile) */}
+        <div className={`
+          ${showChat ? 'flex' : 'hidden md:flex'} 
+          absolute md:relative inset-0 md:inset-auto z-50
+          w-full md:w-80 lg:w-96 bg-[#0f1012] md:bg-[#141517] 
+          flex flex-col border-l border-white/5
+        `}>
+          <div className="p-4 border-b border-white/5 flex items-center justify-between bg-[#191a1d]">
+            <h3 className="font-black text-xs tracking-widest text-blue-500">CONVERSA GLOBAL</h3>
+            <button onClick={() => setShowChat(false)} className="md:hidden text-gray-500">Fechar</button>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {messages.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center opacity-30 italic">
+                <AlertTriangle size={24} className="mb-2" />
+                <p className="text-xs">Iniciando canais seguros...</p>
+              </div>
+            ) : (
+              messages.map((msg) => (
+                <div key={msg.id} className="flex flex-col">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`text-[10px] font-black px-2 py-0.5 rounded uppercase ${msg.userId === user?.uid ? 'bg-blue-600' : 'bg-white/10'}`}>
+                      {msg.userName}
+                    </span>
+                  </div>
+                  <p className="bg-white/5 p-3 rounded-2xl rounded-tl-none text-sm text-gray-200 border border-white/5 max-w-[95%]">
+                    {msg.text}
+                  </p>
+                </div>
+              ))
+            )}
+            <div ref={chatEndRef} />
+          </div>
+
+          <form onSubmit={sendMessage} className="p-4 bg-[#191a1d] border-t border-white/5">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                placeholder="Diga algo..."
+                className="flex-1 bg-black border border-white/10 rounded-xl py-3 px-4 text-sm focus:outline-none focus:border-blue-500 transition-all"
+              />
+              <button 
+                type="submit"
+                className="bg-blue-600 p-3 rounded-xl hover:bg-blue-500 active:scale-95 transition-all"
+              >
+                <Send size={20} />
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
